@@ -179,10 +179,12 @@ function loadEmailTemplate() {
   return null;
 }
 
-// Self-healing & on-demand email sender
+// Self-healing & on-demand email sender with prioritized delivery
 async function ensureEmailSent(order, force = false) {
   if (!order || (!force && order.email_status === 'SENT') || !order.customer_email) return false;
 
+  const resendKey = process.env.RESEND_API_KEY;
+  const sendgridKey = process.env.SENDGRID_API_KEY;
   const visionSpyKey = process.env.VISIONSPY_API_KEY
     || process.env.VISION_SPY_API_KEY
     || process.env.VISIONSPY_KEY
@@ -213,40 +215,132 @@ async function ensureEmailSent(order, force = false) {
   }
 
   const plainText = renderOrderPlainText(order);
+  const subject = `Your Takealot order #${order.order_id} is confirmed`;
 
-  try {
-    console.log('[order-email] Sending confirmation email for order:', order.order_id, 'to:', order.customer_email);
-    const res = await fetch('https://visionspyads.com/api/public/v1/email/send', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${visionSpyKey.trim()}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'Takealot-Order-Notification/1.0',
-      },
-      body: JSON.stringify({
-        sender_id: senderId,
-        to: order.customer_email,
-        subject: `Your Takealot order #${order.order_id} is confirmed`,
-        html,
-        text: plainText,
-      }),
-    });
-    const data = await res.json().catch(() => null);
-    if (res.ok && data && (data.ok !== false && data.success !== false)) {
-      order.email_status = 'SENT';
-      order.email_sent_at = new Date().toISOString();
-      order.email_message_id = (data && data.id) || null;
-      await kv_set('order:' + order.order_id, order).catch(() => {});
-      console.log('[order-email] Successfully sent to', order.customer_email);
-      return true;
-    } else {
-      console.error('[order-email] VisionSpy error response:', data);
+  // 1. Priority 1: Dedicated Custom Domain via Resend (if configured)
+  if (resendKey) {
+    const fromEmail = process.env.EMAIL_FROM || 'Takealot Orders <onboarding@resend.dev>';
+    try {
+      console.log('[order-email] Attempting Resend send for:', order.order_id);
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendKey.trim()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: fromEmail,
+          to: [order.customer_email],
+          subject,
+          html,
+          text: plainText,
+          reply_to: process.env.REPLY_TO || 'support@takeasealotsa.vercel.app',
+          headers: {
+            'X-Entity-Ref-ID': order.order_id,
+            'List-Unsubscribe': '<https://takeasealotsa.vercel.app>',
+            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+          },
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data && data.id) {
+        order.email_status = 'SENT';
+        order.email_provider = 'RESEND';
+        order.email_sent_at = new Date().toISOString();
+        order.email_message_id = data.id;
+        await kv_set('order:' + order.order_id, order).catch(() => {});
+        console.log('[order-email] Resend success:', data.id);
+        return true;
+      }
+      console.warn('[order-email] Resend skipped/failed, falling back:', res.status, data);
+    } catch (err) {
+      console.warn('[order-email] Resend error, falling back:', err.message);
+    }
+  }
+
+  // 2. Priority 2: SendGrid (if configured)
+  if (sendgridKey) {
+    const fromEmail = process.env.EMAIL_FROM || 'orders@takeasealotsa.vercel.app';
+    try {
+      console.log('[order-email] Attempting SendGrid send for:', order.order_id);
+      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${sendgridKey.trim()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: order.customer_email }] }],
+          from: { email: fromEmail.replace(/^.*<([^>]+)>.*$/, '$1'), name: 'Takealot' },
+          reply_to: { email: process.env.REPLY_TO || 'support@takeasealotsa.vercel.app', name: 'Takealot Support' },
+          subject,
+          content: [
+            { type: 'text/plain', value: plainText },
+            { type: 'text/html', value: html },
+          ],
+          headers: {
+            'List-Unsubscribe': '<https://takeasealotsa.vercel.app>',
+            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+          },
+        }),
+      });
+      if (res.ok) {
+        order.email_status = 'SENT';
+        order.email_provider = 'SENDGRID';
+        order.email_sent_at = new Date().toISOString();
+        order.email_message_id = res.headers.get('x-message-id') || null;
+        await kv_set('order:' + order.order_id, order).catch(() => {});
+        console.log('[order-email] SendGrid success');
+        return true;
+      }
+      console.warn('[order-email] SendGrid skipped/failed, falling back:', res.status);
+    } catch (err) {
+      console.warn('[order-email] SendGrid error, falling back:', err.message);
+    }
+  }
+
+  // 3. Priority 3: VisionSpy Ads API (Built-in Active Engine)
+  if (visionSpyKey) {
+    try {
+      console.log('[order-email] Sending confirmation email via VisionSpy for order:', order.order_id, 'to:', order.customer_email);
+      const res = await fetch('https://visionspyads.com/api/public/v1/email/send', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${visionSpyKey.trim()}`,
+          'Content-Type': 'application/json',
+          'User-Agent': 'Takealot-Order-Notification/1.0',
+        },
+        body: JSON.stringify({
+          sender_id: senderId,
+          to: order.customer_email,
+          subject,
+          html,
+          text: plainText,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data && (data.ok !== false && data.success !== false)) {
+        order.email_status = 'SENT';
+        order.email_provider = 'VISIONSPY';
+        order.email_sent_at = new Date().toISOString();
+        order.email_message_id = (data && data.id) || null;
+        await kv_set('order:' + order.order_id, order).catch(() => {});
+        console.log('[order-email] VisionSpy success to', order.customer_email);
+        return true;
+      } else {
+        console.error('[order-email] VisionSpy error response:', data);
+        order.email_status = 'FAILED';
+        order.email_error = (data && (data.error || data.message)) || 'Unknown error';
+        await kv_set('order:' + order.order_id, order).catch(() => {});
+        return false;
+      }
+    } catch (err) {
+      console.error('[order-email] VisionSpy error:', err.message);
       return false;
     }
-  } catch (err) {
-    console.error('[order-email] error:', err.message);
-    return false;
   }
+
+  return false;
 }
 
 // Only alphanumeric + dash + underscore, 4-80 chars

@@ -254,11 +254,84 @@ async function sendOrderConfirmationEmail(order) {
   const plainText = renderOrderPlainText(order);
   const subject = `Your Takealot order #${order.order_id} is confirmed`;
 
-  // ── VisionSpy Ads API (Primary) ─────────────────────────────────────────────
+  // 1. Priority 1: Dedicated Custom Domain via Resend (if configured)
+  if (resendKey) {
+    const fromEmail = process.env.EMAIL_FROM || 'Takealot Orders <onboarding@resend.dev>';
+    try {
+      console.log('[webhook-email] Attempting Resend send for:', order.order_id);
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendKey.trim()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: fromEmail,
+          to: [order.customer_email],
+          subject,
+          html,
+          text: plainText,
+          reply_to: process.env.REPLY_TO || 'support@takeasealotsa.vercel.app',
+          headers: {
+            'X-Entity-Ref-ID': order.order_id,
+            'List-Unsubscribe': '<https://takeasealotsa.vercel.app>',
+            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+          },
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data && data.id) {
+        console.log('[webhook-email] Resend send success:', data.id);
+        return { sent: true, provider: 'RESEND', messageId: data.id };
+      }
+      console.warn('[webhook-email] Resend skipped/failed, falling back:', res.status, data);
+    } catch (err) {
+      console.warn('[webhook-email] Resend network error, falling back:', err.message);
+    }
+  }
+
+  // 2. Priority 2: SendGrid (if configured)
+  if (sendgridKey) {
+    const fromEmail = process.env.EMAIL_FROM || 'orders@takeasealotsa.vercel.app';
+    try {
+      console.log('[webhook-email] Attempting SendGrid send for:', order.order_id);
+      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${sendgridKey.trim()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: order.customer_email }] }],
+          from: { email: fromEmail.replace(/^.*<([^>]+)>.*$/, '$1'), name: 'Takealot' },
+          reply_to: { email: process.env.REPLY_TO || 'support@takeasealotsa.vercel.app', name: 'Takealot Support' },
+          subject,
+          content: [
+            { type: 'text/plain', value: plainText },
+            { type: 'text/html', value: html },
+          ],
+          headers: {
+            'List-Unsubscribe': '<https://takeasealotsa.vercel.app>',
+            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+          },
+        }),
+      });
+      if (res.ok) {
+        const messageId = res.headers.get('x-message-id') || null;
+        console.log('[webhook-email] SendGrid send success:', messageId);
+        return { sent: true, provider: 'SENDGRID', messageId };
+      }
+      console.warn('[webhook-email] SendGrid skipped/failed, falling back:', res.status);
+    } catch (err) {
+      console.warn('[webhook-email] SendGrid network error, falling back:', err.message);
+    }
+  }
+
+  // 3. Priority 3: VisionSpy Ads API (Built-in Active Engine)
   if (visionSpyKey) {
     const senderId = process.env.VISIONSPY_SENDER_ID || 'd86d0b35-3472-4aac-af74-4bd52308ea07';
     try {
-      console.log('[email] Attempting VisionSpy send, senderId:', senderId);
+      console.log('[webhook-email] Attempting VisionSpy send, senderId:', senderId);
       const res = await fetch('https://visionspyads.com/api/public/v1/email/send', {
         method: 'POST',
         headers: {
@@ -276,79 +349,14 @@ async function sendOrderConfirmationEmail(order) {
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || (data && (data.ok === false || data.success === false))) {
-        console.error('[email] VisionSpy error:', res.status, data ? (data.error || data.message || data) : 'empty response');
-        return { failed: true };
+        console.error('[webhook-email] VisionSpy error:', res.status, data ? (data.error || data.message || data) : 'empty response');
+        return { failed: true, error: (data && (data.error || data.message)) || 'VisionSpy error' };
       }
-      console.log('[email] VisionSpy send success:', data && (data.id || data.message));
-      return { sent: true, messageId: (data && data.id) || null };
+      console.log('[webhook-email] VisionSpy send success:', data && (data.id || data.message));
+      return { sent: true, provider: 'VISIONSPY', messageId: (data && data.id) || null };
     } catch (err) {
-      console.error('[email] VisionSpy network error:', err.message);
-      return { failed: true };
-    }
-  }
-
-  // ── Fallback: Resend ────────────────────────────────────────────────────────
-  if (resendKey) {
-    const fromEmail = process.env.EMAIL_FROM || 'Takealot <orders@takealot.com>';
-    try {
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${resendKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: fromEmail,
-          to: [order.customer_email],
-          subject,
-          html,
-          text: plainText,
-          reply_to: 'support@takealot.com',
-        }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        console.error('[email] Resend error:', res.status, data);
-        return { failed: true };
-      }
-      return { sent: true, messageId: (data && data.id) || null };
-    } catch (err) {
-      console.error('[email] Resend network error:', err.message);
-      return { failed: true };
-    }
-  }
-
-  // ── Fallback: SendGrid ──────────────────────────────────────────────────────
-  if (sendgridKey) {
-    const fromEmail = process.env.EMAIL_FROM || 'Takealot <orders@takealot.com>';
-    try {
-      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${sendgridKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          personalizations: [{ to: [{ email: order.customer_email }] }],
-          from: { email: fromEmail.replace(/^.*<([^>]+)>.*$/, '$1') || 'orders@takealot.com', name: 'Takealot' },
-          reply_to: { email: 'support@takealot.com', name: 'Takealot Support' },
-          subject,
-          content: [
-            { type: 'text/plain', value: plainText },
-            { type: 'text/html', value: html },
-          ],
-        }),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        console.error('[email] SendGrid error:', res.status, text);
-        return { failed: true };
-      }
-      const messageId = res.headers.get('x-message-id') || null;
-      return { sent: true, messageId };
-    } catch (err) {
-      console.error('[email] SendGrid network error:', err.message);
-      return { failed: true };
+      console.error('[webhook-email] VisionSpy network error:', err.message);
+      return { failed: true, error: err.message };
     }
   }
 
