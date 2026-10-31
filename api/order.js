@@ -157,9 +157,8 @@ function renderOrderPlainText(order) {
     ``,
     `----------------------------------------------------------------------`,
     `Takealot Online (Pty) Ltd • Reg. No. 2010/020248/07 • VAT No. 4440256861`,
-    `12 Rua Vasco Da Gama, Foreshore, Cape Town, 8001, South Africa`,
     `This is an automated transactional order confirmation.`,
-    `To ensure you receive future order notifications in your Primary inbox, please mark this message as Not Spam or move it to your Primary folder.`,
+    `To manage your communication preferences or unsubscribe: https://takeasealotsa.vercel.app`,
   ].join('\n');
 }
 

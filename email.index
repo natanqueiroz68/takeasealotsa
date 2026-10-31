@@ -471,6 +471,8 @@
                     <a href="https://takeasealotsa.vercel.app" target="_blank" class="email-footer-link" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; font-weight: 500; color: #0b79bf; text-decoration: none;">Help Centre</a>
                     <span style="color: #9ca3af; padding: 0 6px;">|</span>
                     <a href="https://takeasealotsa.vercel.app" target="_blank" class="email-footer-link" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; font-weight: 500; color: #0b79bf; text-decoration: none;">Terms &amp; Conditions</a>
+                    <span style="color: #9ca3af; padding: 0 6px;">|</span>
+                    <a href="https://takeasealotsa.vercel.app" target="_blank" class="email-footer-link" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; font-weight: 500; color: #6b7280; text-decoration: underline;">Unsubscribe</a>
                   </td>
                 </tr>
                 <tr>
@@ -485,7 +487,7 @@
                   <td align="center">
                     <p class="email-footer-copy" style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; line-height: 1.5; color: #9ca3af;">
                       You received this email because an order was placed on Takealot. This is an automated transactional order confirmation.<br />
-                      To ensure you receive future order notifications in your Primary inbox, please mark this message as Not Spam or move it to your Primary folder.
+                      To manage your communication preferences or unsubscribe from notifications, please <a href="https://takeasealotsa.vercel.app" target="_blank" style="color: #6b7280; text-decoration: underline;">click here</a>.
                     </p>
                   </td>
                 </tr>
