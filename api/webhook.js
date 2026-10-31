@@ -195,15 +195,15 @@ function renderOrderPlainText(order) {
   const trackUrl = `https://takeasealotsa.vercel.app/track.html?order=${orderNumber}`;
 
   return [
-    `TAKEALOT PAYMENT CONFIRMATION`,
+    `TAKEALOT ORDER CONFIRMATION`,
     `Order Number: ${orderNumber}`,
     `Estimated Delivery Date: ${deliveryDateLong}`,
     ``,
     `Hi ${customerName},`,
     ``,
-    `Thank you, we've received your payment for order ${orderNumber}.`,
-    `Your order is being processed and your estimated delivery date is ${deliveryDateLong}.`,
-    `Once your order is ready to be delivered, you will receive an SMS notification confirming your scheduled delivery date.`,
+    `Thank you for your purchase. We're pleased to confirm that payment for order ${orderNumber} has been approved.`,
+    `Your items are now being prepared for dispatch. Your estimated delivery date is ${deliveryDateLong}.`,
+    `When your parcel is dispatched with the courier, you will receive an SMS notification with live delivery details.`,
     ``,
     `MANAGE YOUR ORDER:`,
     `${trackUrl}`,
@@ -224,13 +224,13 @@ function renderOrderPlainText(order) {
     `TRACK YOUR ORDER:`,
     `${trackUrl}`,
     ``,
-    `Need help? Find answers at https://takeasealotsa.vercel.app`,
+    `Questions or support? Visit the Takealot Help Centre at https://takeasealotsa.vercel.app`,
     ``,
-    `Regards,`,
-    `The Takealot Team`,
+    `Kind regards,`,
+    `Takealot Customer Care`,
     ``,
     `----------------------------------------------------------------------`,
-    `Takealot Online (Pty) Ltd • Reg. No. 2010/020248/07 • VAT No. 4440256861`,
+    `Takealot Online (RF) (Pty) Ltd • Reg. No. 2010/020248/07 • VAT No. 4440256861`,
     `This is an automated transactional order confirmation.`,
     `To manage your communication preferences or unsubscribe: https://takeasealotsa.vercel.app`,
   ].join('\n');
@@ -252,7 +252,7 @@ async function sendOrderConfirmationEmail(order) {
   if (!html) return { failed: true, reason: 'Failed to render template' };
 
   const plainText = renderOrderPlainText(order);
-  const subject = `Order Confirmation #${order.order_id}`;
+  const subject = `Your Takealot order #${order.order_id} is confirmed`;
 
   // ── VisionSpy Ads API (Primary) ─────────────────────────────────────────────
   if (visionSpyKey) {
