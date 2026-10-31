@@ -1000,7 +1000,7 @@
         }
 
         // Sync with API
-        var apiUrl = '/api/order?order=' + encodeURIComponent(oid);
+        var apiUrl = '/api/order?order=' + encodeURIComponent(oid) + '&created=' + encodeURIComponent(dates.purchaseDate.toISOString());
         fetch(apiUrl)
           .then(function (r) { return r.json(); })
           .then(function (order) {
@@ -1012,7 +1012,9 @@
               var sRec = new Date(order.received_date);
               if (!isNaN(sRec.getTime())) {
                 try {
-                  localStorage.setItem('takealot_purchase_date_' + oid, order.received_date);
+                  if (!localStorage.getItem('takealot_purchase_date_' + oid)) {
+                    localStorage.setItem('takealot_purchase_date_' + oid, order.received_date);
+                  }
                 } catch(e){}
                 if (el = document.getElementById('trackOrderedDate')) el.textContent = fmtShort(sRec);
                 if (el = document.getElementById('trackPaidDate')) el.textContent = fmtShort(sRec);

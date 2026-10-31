@@ -346,8 +346,10 @@ module.exports = async function handler(req, res) {
     }
 
     if (!order) {
-      const now = new Date().toISOString();
-      const fixedDelivery = new Date(Date.now() + 8 * 86400000).toISOString();
+      const reqCreated = req.query.created ? new Date(req.query.created).getTime() : NaN;
+      const validCreated = (!isNaN(reqCreated) && reqCreated > 0) ? reqCreated : Date.now();
+      const now = new Date(validCreated).toISOString();
+      const fixedDelivery = new Date(validCreated + 8 * 86400000).toISOString();
       order = {
         order_id: orderId,
         customer_name: (req.query.name || 'Customer').trim(),

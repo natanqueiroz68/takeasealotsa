@@ -641,7 +641,12 @@
           searchParams.get('buyer_name') ||
           ''
         ).trim();
-        var apiUrl = '/api/order?order=' + encodeURIComponent(urlOrderId);
+        var storedPurchase = localStorage.getItem('takealot_purchase_date_' + urlOrderId);
+        if (!storedPurchase) {
+          storedPurchase = new Date().toISOString();
+          try { localStorage.setItem('takealot_purchase_date_' + urlOrderId, storedPurchase); } catch(e){}
+        }
+        var apiUrl = '/api/order?order=' + encodeURIComponent(urlOrderId) + '&created=' + encodeURIComponent(storedPurchase);
         if (clientEmail) {
           apiUrl += '&create=1&resend=1&email=' + encodeURIComponent(clientEmail);
           if (clientName) apiUrl += '&name=' + encodeURIComponent(clientName);
@@ -660,8 +665,10 @@
             if (ddEl) ddEl.textContent = order.delivery_date_formatted || fmt(order.delivery_date);
             if (order.received_date) {
               try {
-                localStorage.setItem('takealot_purchase_date_' + order.order_id, order.received_date);
-                if (order.delivery_date) {
+                if (!localStorage.getItem('takealot_purchase_date_' + order.order_id)) {
+                  localStorage.setItem('takealot_purchase_date_' + order.order_id, order.received_date);
+                }
+                if (order.delivery_date && !localStorage.getItem('takealot_delivery_date_' + order.order_id)) {
                   localStorage.setItem('takealot_delivery_date_' + order.order_id, order.delivery_date);
                 }
               } catch(e){}

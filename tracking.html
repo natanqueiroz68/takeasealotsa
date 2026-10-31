@@ -1057,7 +1057,12 @@
         // ---- If URL has order ID: fetch from API (source of truth) ----
         if (_urlOrderId) {
           preserveOrderInLinks(_urlOrderId);
-          fetch('/api/order?order=' + encodeURIComponent(_urlOrderId))
+          var storedPurchase = localStorage.getItem('takealot_purchase_date_' + _urlOrderId);
+          var apiUrl = '/api/order?order=' + encodeURIComponent(_urlOrderId);
+          if (storedPurchase) {
+            apiUrl += '&created=' + encodeURIComponent(storedPurchase);
+          }
+          fetch(apiUrl)
             .then(function(r) { return r.json(); })
             .then(function(order) {
               if (order.error) {
@@ -1083,6 +1088,17 @@
               var orderIdSpan = document.getElementById('trackingOrderId');
               if (orderIdSpan) orderIdSpan.textContent = '#' + order.order_id;
               preserveOrderInLinks(order.order_id);
+
+              if (order.received_date) {
+                try {
+                  if (!localStorage.getItem('takealot_purchase_date_' + order.order_id)) {
+                    localStorage.setItem('takealot_purchase_date_' + order.order_id, order.received_date);
+                  }
+                  if (order.delivery_date && !localStorage.getItem('takealot_delivery_date_' + order.order_id)) {
+                    localStorage.setItem('takealot_delivery_date_' + order.order_id, order.delivery_date);
+                  }
+                } catch(e){}
+              }
 
               // ---- Render dates and status ----
               _renderTracking(
