@@ -8,7 +8,7 @@
   <meta name="x-apple-disable-message-reformatting" />
   <meta name="color-scheme" content="light dark" />
   <meta name="supported-color-schemes" content="light dark" />
-  <title>Payment Receipt: Order #{{order_number}} | Takealot</title>
+  <title>Order Confirmation #{{order_number}}</title>
 
   <style type="text/css">
     /* ── BASE RESETS ── */
@@ -196,10 +196,9 @@
 </head>
 <body class="email-body" style="margin: 0; padding: 0; background-color: #f4f4f4; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
 
-  <!-- ── INBOX PREVIEW & PREHEADER (OFFICIAL TRANSACTIONAL RECEIPT) ── -->
-  <div style="display: none; max-height: 0px; overflow: hidden; mso-hide: all; font-size: 1px; line-height: 1px; max-width: 0px; opacity: 0; color: #f4f4f4;">
-    Official receipt and order confirmation for Takealot order #{{order_number}}. Total paid: R 999.00. Scheduled courier delivery: {{delivery_date_long}}.
-    &#847; &zwnj; &nbsp; &#8199; &shy; &#847; &zwnj; &nbsp; &#8199; &shy; &#847; &zwnj; &nbsp; &#8199; &shy; &#847; &zwnj; &nbsp; &#8199; &shy; &#847; &zwnj; &nbsp; &#8199; &shy; &#847; &zwnj; &nbsp; &#8199; &shy; &#847; &zwnj; &nbsp; &#8199; &shy; &#847; &zwnj; &nbsp; &#8199; &shy; &#847; &zwnj; &nbsp; &#8199; &shy; &#847; &zwnj; &nbsp; &#8199; &shy;
+  <!-- ── INBOX PREVIEW & PREHEADER ── -->
+  <div style="display: none; max-height: 0px; overflow: hidden; mso-hide: all;">
+    Thank you for your order #{{order_number}}. Delivery date: {{delivery_date_long}}.
   </div>
 
   <!-- OUTER WRAPPER TABLE -->
@@ -454,7 +453,7 @@
               </table>
 
               <p class="email-text" style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #6b7280;">
-                Need help? Find the answer <a href="https://takeasealotsa.vercel.app" target="_blank" class="email-link" style="color: #0b79bf; text-decoration: underline;">here</a>.
+                Need help? Visit our <a href="https://takeasealotsa.vercel.app" target="_blank" class="email-link" style="color: #0b79bf; text-decoration: underline;">Customer Help Centre</a>.
               </p>
             </td>
           </tr>
@@ -486,7 +485,7 @@
                   <td align="center">
                     <p class="email-footer-copy" style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; line-height: 1.5; color: #9ca3af;">
                       You received this email because an order was placed on Takealot. This is an automated transactional order confirmation.<br />
-                      To ensure you receive future order notifications in your Primary inbox, please add <strong style="color: #4b5563;">orders@takealot.com</strong> to your contacts or safe sender list.
+                      To ensure you receive future order notifications in your Primary inbox, please mark this message as Not Spam or move it to your Primary folder.
                     </p>
                   </td>
                 </tr>
