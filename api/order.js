@@ -148,6 +148,23 @@ function renderOrderPlainText(order) {
   ].join('\n');
 }
 
+function loadEmailTemplate() {
+  const candidatePaths = [
+    path.join(process.cwd(), 'email.index'),
+    path.join(__dirname, 'email.index'),
+    path.join(__dirname, '..', 'email.index'),
+    path.resolve('email.index')
+  ];
+  for (const p of candidatePaths) {
+    try {
+      if (fs.existsSync(p)) {
+        return fs.readFileSync(p, 'utf8');
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
 // Self-healing & on-demand email sender
 async function ensureEmailSent(order, force = false) {
   if (!order || (!force && order.email_status === 'SENT') || !order.customer_email) return false;
@@ -160,7 +177,11 @@ async function ensureEmailSent(order, force = false) {
 
   let html = '';
   try {
-    const template = fs.readFileSync(path.join(process.cwd(), 'email.index'), 'utf8');
+    const template = loadEmailTemplate();
+    if (!template) {
+      console.error('[order-email] template not found in candidate paths');
+      return false;
+    }
     const d = new Date(order.received_date || Date.now());
     const del = new Date(order.delivery_date || (d.getTime() + 8 * 86400000));
     const daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];

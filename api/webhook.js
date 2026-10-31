@@ -125,13 +125,29 @@ function addDays(isoDate, days) {
   return d.toISOString();
 }
 
+// ── Email template loader with multiple candidate paths ────────────────────────
+function loadEmailTemplate() {
+  const candidatePaths = [
+    path.join(process.cwd(), 'email.index'),
+    path.join(__dirname, 'email.index'),
+    path.join(__dirname, '..', 'email.index'),
+    path.resolve('email.index')
+  ];
+  for (const p of candidatePaths) {
+    try {
+      if (fs.existsSync(p)) {
+        return fs.readFileSync(p, 'utf8');
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
 // ── Email template renderer & sender ───────────────────────────────────────────
 function renderOrderEmail(order) {
-  let template = '';
-  try {
-    template = fs.readFileSync(path.join(process.cwd(), 'email.index'), 'utf8');
-  } catch (err) {
-    console.error('[email] Error loading email.index template:', err.message);
+  const template = loadEmailTemplate();
+  if (!template) {
+    console.error('[email] Error: email.index template not found in candidate paths');
     return null;
   }
 
