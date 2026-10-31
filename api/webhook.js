@@ -118,11 +118,33 @@ async function kv_set(key, value) {
   }
 }
 
-// ── Date helper ────────────────────────────────────────────────────────────────
-function addDays(isoDate, days) {
-  const d = new Date(isoDate);
-  d.setDate(d.getDate() + days);
-  return d.toISOString();
+// ── South Africa (Africa/Johannesburg) Date Helpers ───────────────────────────
+function addDays(isoDate, days = 8) {
+  const d = new Date(isoDate || Date.now());
+  const validTime = !isNaN(d.getTime()) ? d.getTime() : Date.now();
+  return new Date(validTime + days * 86400000).toISOString();
+}
+
+function formatSADate(dateInput, type = 'short') {
+  const d = new Date(dateInput || Date.now());
+  const options = {
+    timeZone: 'Africa/Johannesburg',
+    weekday: type === 'long' ? 'long' : 'short',
+    day: 'numeric',
+    month: type === 'long' ? 'long' : 'short',
+    year: 'numeric'
+  };
+  return new Intl.DateTimeFormat('en-GB', options).format(d);
+}
+
+function getSAIsoDate(dateInput) {
+  const d = new Date(dateInput || Date.now());
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Johannesburg',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(d);
 }
 
 // ── Email template loader with multiple candidate paths ────────────────────────
@@ -151,17 +173,9 @@ function renderOrderEmail(order) {
     return null;
   }
 
-  const d = new Date(order.received_date || Date.now());
-  const del = new Date(order.delivery_date || (Date.now() + 8 * 86400000));
-
-  const daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const daysLong = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const monthsLong = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-
-  const orderDateShort = `${daysShort[d.getDay()]}, ${d.getDate()} ${monthsShort[d.getMonth()]} ${d.getFullYear()}`;
-  const deliveryDateIso = del.toISOString().slice(0, 10);
-  const deliveryDateLong = `${daysLong[del.getDay()]}, ${del.getDate()} ${monthsLong[del.getMonth()]} ${del.getFullYear()}`;
+  const orderDateShort = formatSADate(order.received_date, 'short');
+  const deliveryDateIso = getSAIsoDate(order.delivery_date);
+  const deliveryDateLong = formatSADate(order.delivery_date, 'long');
 
   return template
     .replace(/\{\{customer_name\}\}/g, order.customer_name || 'Customer')
@@ -173,16 +187,8 @@ function renderOrderEmail(order) {
 }
 
 function renderOrderPlainText(order) {
-  const d = new Date(order.received_date || Date.now());
-  const del = new Date(order.delivery_date || (Date.now() + 8 * 86400000));
-
-  const daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const daysLong = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const monthsLong = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-
-  const orderDateShort = `${daysShort[d.getDay()]}, ${d.getDate()} ${monthsShort[d.getMonth()]} ${d.getFullYear()}`;
-  const deliveryDateLong = `${daysLong[del.getDay()]}, ${del.getDate()} ${monthsLong[del.getMonth()]} ${del.getFullYear()}`;
+  const orderDateShort = formatSADate(order.received_date, 'short');
+  const deliveryDateLong = formatSADate(order.delivery_date, 'long');
   const customerName = order.customer_name || 'Customer';
   const orderNumber = order.order_id;
   const variant = 'Premium Black';

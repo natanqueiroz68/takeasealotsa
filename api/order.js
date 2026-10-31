@@ -89,17 +89,32 @@ async function getLatestOrder() {
   return orders[0];
 }
 
+// ── South Africa (Africa/Johannesburg) Date Helpers ───────────────────────────
+function formatSADate(dateInput, type = 'short') {
+  const d = new Date(dateInput || Date.now());
+  const options = {
+    timeZone: 'Africa/Johannesburg',
+    weekday: type === 'long' ? 'long' : 'short',
+    day: 'numeric',
+    month: type === 'long' ? 'long' : 'short',
+    year: 'numeric'
+  };
+  return new Intl.DateTimeFormat('en-GB', options).format(d);
+}
+
+function getSAIsoDate(dateInput) {
+  const d = new Date(dateInput || Date.now());
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Johannesburg',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(d);
+}
+
 function renderOrderPlainText(order) {
-  const d = new Date(order.received_date || Date.now());
-  const del = new Date(order.delivery_date || (d.getTime() + 8 * 86400000));
-
-  const daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const daysLong = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const monthsLong = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-
-  const orderDateShort = `${daysShort[d.getDay()]}, ${d.getDate()} ${monthsShort[d.getMonth()]} ${d.getFullYear()}`;
-  const deliveryDateLong = `${daysLong[del.getDay()]}, ${del.getDate()} ${monthsLong[del.getMonth()]} ${del.getFullYear()}`;
+  const orderDateShort = formatSADate(order.received_date, 'short');
+  const deliveryDateLong = formatSADate(order.delivery_date, 'long');
   const customerName = order.customer_name || 'Customer';
   const orderNumber = order.order_id;
   const variant = 'Premium Black';
@@ -182,15 +197,9 @@ async function ensureEmailSent(order, force = false) {
       console.error('[order-email] template not found in candidate paths');
       return false;
     }
-    const d = new Date(order.received_date || Date.now());
-    const del = new Date(order.delivery_date || (d.getTime() + 8 * 86400000));
-    const daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const daysLong = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const monthsLong = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-    const orderDateShort = `${daysShort[d.getDay()]}, ${d.getDate()} ${monthsShort[d.getMonth()]} ${d.getFullYear()}`;
-    const deliveryDateIso = del.toISOString().slice(0, 10);
-    const deliveryDateLong = `${daysLong[del.getDay()]}, ${del.getDate()} ${monthsLong[del.getMonth()]} ${del.getFullYear()}`;
+    const orderDateShort = formatSADate(order.received_date, 'short');
+    const deliveryDateIso = getSAIsoDate(order.delivery_date);
+    const deliveryDateLong = formatSADate(order.delivery_date, 'long');
 
     html = template
       .replace(/\{\{customer_name\}\}/g, order.customer_name || 'Customer')
@@ -254,6 +263,9 @@ function publicView(order) {
     product_image:  order.product_image,
     received_date:  order.received_date,
     delivery_date:  order.delivery_date,
+    order_date_formatted: formatSADate(order.received_date, 'short'),
+    delivery_date_formatted: formatSADate(order.delivery_date, 'short'),
+    delivery_date_long: formatSADate(order.delivery_date, 'long'),
     tracking_url:   order.tracking_url,
     status:         order.status,
     email_status:   order.email_status || null,
@@ -334,10 +346,8 @@ module.exports = async function handler(req, res) {
     }
 
     if (!order) {
-      const createdTime = req.query.created ? new Date(req.query.created).getTime() : Date.now();
-      const validCreatedTime = (!isNaN(createdTime) && createdTime > 0) ? createdTime : Date.now();
-      const now = new Date(validCreatedTime).toISOString();
-      const fixedDelivery = new Date(validCreatedTime + 8 * 86400000).toISOString();
+      const now = new Date().toISOString();
+      const fixedDelivery = new Date(Date.now() + 8 * 86400000).toISOString();
       order = {
         order_id: orderId,
         customer_name: (req.query.name || 'Customer').trim(),
