@@ -17,33 +17,42 @@ const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const fs = require('fs');
 const path = require('path');
 
-// Upstash REST helpers
+// Upstash REST helpers (fail-safe)
 async function kv_get(key) {
-  const res = await fetch(REDIS_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${REDIS_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(['GET', key]),
-  });
-  if (!res.ok) throw new Error('Redis GET failed: ' + res.status);
-  const data = await res.json();
-  if (!data.result) return null;
-  try { return JSON.parse(data.result); } catch { return null; }
+  if (!REDIS_URL || !REDIS_TOKEN) return null;
+  try {
+    const res = await fetch(REDIS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${REDIS_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(['GET', key]),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.result) return null;
+    try { return JSON.parse(data.result); } catch { return null; }
+  } catch (err) {
+    return null;
+  }
 }
 
 async function kv_set(key, value) {
-  const res = await fetch(REDIS_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${REDIS_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(['SET', key, JSON.stringify(value)]),
-  });
-  if (!res.ok) throw new Error('Redis SET failed: ' + res.status);
-  return true;
+  if (!REDIS_URL || !REDIS_TOKEN) return false;
+  try {
+    const res = await fetch(REDIS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${REDIS_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(['SET', key, JSON.stringify(value)]),
+    });
+    return res.ok;
+  } catch (err) {
+    return false;
+  }
 }
 
 // Find the most recent order across all keys
@@ -82,7 +91,7 @@ async function getLatestOrder() {
 
 function renderOrderPlainText(order) {
   const d = new Date(order.received_date || Date.now());
-  const del = new Date(order.delivery_date || (validCreatedTime + 8 * 86400000));
+  const del = new Date(order.delivery_date || (d.getTime() + 8 * 86400000));
 
   const daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -153,7 +162,7 @@ async function ensureEmailSent(order, force = false) {
   try {
     const template = fs.readFileSync(path.join(process.cwd(), 'email.index'), 'utf8');
     const d = new Date(order.received_date || Date.now());
-    const del = new Date(order.delivery_date || (validCreatedTime + 8 * 86400000));
+    const del = new Date(order.delivery_date || (d.getTime() + 8 * 86400000));
     const daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const daysLong = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
