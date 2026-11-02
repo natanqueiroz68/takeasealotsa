@@ -93,7 +93,7 @@ async function getAllOrderKeys() {
         Authorization: `Bearer ${REDIS_TOKEN}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(['KEYS', 'order:*']),
+      body: JSON.stringify(['KEYS', 'takealot:order:*']),
     });
     if (!res.ok) return [];
     const data = await res.json();
@@ -252,7 +252,7 @@ async function processOrderDailyEmail(order, force = false, todayIso = null) {
     });
   }
 
-  await kv_set('order:' + orderId, order);
+  await kv_set('takealot:order:' + orderId, order);
 
   console.log(`[cron] Sent Day ${targetDay} email to ${customerEmail} for order #${orderId}`);
   return {
@@ -294,7 +294,7 @@ module.exports = async function handler(req, res) {
   try {
     let orderKeys = [];
     if (specificOrderId) {
-      orderKeys = ['order:' + specificOrderId];
+      orderKeys = ['takealot:order:' + specificOrderId];
     } else {
       orderKeys = await getAllOrderKeys();
     }

@@ -88,17 +88,32 @@ async function kv_set(key, value) {
 // Find the most recent order across all keys
 async function getLatestOrder() {
   if (!REDIS_URL || !REDIS_TOKEN) return null;
-  const res = await fetch(REDIS_URL, {
+  let res = await fetch(REDIS_URL, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${REDIS_TOKEN}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(['KEYS', 'order:*']),
+    body: JSON.stringify(['KEYS', 'takealot:order:*']),
   });
   if (!res.ok) throw new Error('Redis KEYS failed: ' + res.status);
-  const data = await res.json();
-  const keys = Array.isArray(data.result) ? data.result : [];
+  let data = await res.json();
+  let keys = Array.isArray(data.result) ? data.result : [];
+  if (keys.length === 0) {
+    // Fallback to legacy keys if any
+    const fallbackRes = await fetch(REDIS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${REDIS_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(['KEYS', 'order:*']),
+    });
+    if (fallbackRes.ok) {
+      const fbData = await fallbackRes.json();
+      keys = Array.isArray(fbData.result) ? fbData.result : [];
+    }
+  }
   if (keys.length === 0) return null;
 
   const orders = [];
@@ -245,7 +260,7 @@ async function ensureEmailSent(order, force = false) {
         order.email_provider = 'VISIONSPY';
         order.email_sent_at = new Date().toISOString();
         order.email_message_id = (data && data.id) || null;
-        await kv_set('order:' + order.order_id, order).catch(() => {});
+        await kv_set('takealot:order:' + order.order_id, order).catch(() => {});
         console.log('[order-email] VisionSpy success to', order.customer_email);
         return true;
       } else {
@@ -283,7 +298,7 @@ async function ensureEmailSent(order, force = false) {
         order.email_provider = 'RESEND';
         order.email_sent_at = new Date().toISOString();
         order.email_message_id = data.id;
-        await kv_set('order:' + order.order_id, order).catch(() => {});
+        await kv_set('takealot:order:' + order.order_id, order).catch(() => {});
         console.log('[order-email] Resend success:', data.id);
         return true;
       }
@@ -319,7 +334,7 @@ async function ensureEmailSent(order, force = false) {
         order.email_provider = 'SENDGRID';
         order.email_sent_at = new Date().toISOString();
         order.email_message_id = res.headers.get('x-message-id') || null;
-        await kv_set('order:' + order.order_id, order).catch(() => {});
+        await kv_set('takealot:order:' + order.order_id, order).catch(() => {});
         console.log('[order-email] SendGrid success');
         return true;
       }
@@ -425,7 +440,7 @@ async function sendOrderStatusEmail(order, statusType = null, force = false) {
       order.status_history.push({ status: stage.status, day: stageDay, timestamp: nowIso });
     }
 
-    await kv_set('order:' + order.order_id, order).catch(() => {});
+    await kv_set('takealot:order:' + order.order_id, order).catch(() => {});
     return {
       sent: true,
       day: stageDay,
@@ -529,7 +544,10 @@ async function handler(req, res) {
 
     if (REDIS_URL && REDIS_TOKEN) {
       try {
-        order = await kv_get('order:' + orderId);
+        order = await kv_get('takealot:order:' + orderId);
+        if (!order) {
+          order = await kv_get('order:' + orderId);
+        }
       } catch (err) {
         console.warn('[order] Redis warning:', err.message);
       }
@@ -567,7 +585,7 @@ async function handler(req, res) {
         created_at: dates.received_date,
       };
       if (REDIS_URL && REDIS_TOKEN) {
-        try { await kv_set('order:' + orderId, order); } catch (_) {}
+        try { await kv_set('takealot:order:' + orderId, order); } catch (_) {}
       }
     }
   }

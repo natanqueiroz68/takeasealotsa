@@ -87,7 +87,10 @@ module.exports = async function handler(req, res) {
 
   let order;
   try {
-    order = await kv_get('order:' + orderId);
+    order = await kv_get('takealot:order:' + orderId);
+    if (!order) {
+      order = await kv_get('order:' + orderId);
+    }
   } catch (err) {
     return res.status(503).json({ error: 'Storage read error' });
   }
@@ -102,7 +105,7 @@ module.exports = async function handler(req, res) {
   }]);
 
   try {
-    await kv_set('order:' + orderId, order);
+    await kv_set('takealot:order:' + orderId, order);
   } catch (err) {
     return res.status(500).json({ error: 'Storage write error' });
   }

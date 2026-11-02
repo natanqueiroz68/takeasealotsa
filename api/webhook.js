@@ -538,7 +538,10 @@ async function handler(req, res) {
   // ── Step 7: build order record & apply idempotency ───────────────────────────
   let existing = null;
   try {
-    existing = await kv_get('order:' + orderId);
+    existing = await kv_get('takealot:order:' + orderId);
+    if (!existing) {
+      existing = await kv_get('order:' + orderId);
+    }
   } catch (err) {
     console.error('[webhook] Redis get error:', err.message);
   }
@@ -591,7 +594,7 @@ async function handler(req, res) {
 
   // ── Step 9: persist to Redis (fail-safe) ──────────────────────────────────────
   try {
-    await kv_set('order:' + orderId, order);
+    await kv_set('takealot:order:' + orderId, order);
   } catch (err) {
     console.warn('[webhook] Redis write skipped:', err.message);
   }
