@@ -118,34 +118,13 @@ async function kv_set(key, value) {
   }
 }
 
-// ── South Africa (Africa/Johannesburg) Date Helpers ───────────────────────────
-function addDays(isoDate, days = 8) {
-  const d = new Date(isoDate || Date.now());
-  const validTime = !isNaN(d.getTime()) ? d.getTime() : Date.now();
-  return new Date(validTime + days * 86400000).toISOString();
-}
-
-function formatSADate(dateInput, type = 'short') {
-  const d = new Date(dateInput || Date.now());
-  const options = {
-    timeZone: 'Africa/Johannesburg',
-    weekday: type === 'long' ? 'long' : 'short',
-    day: 'numeric',
-    month: type === 'long' ? 'long' : 'short',
-    year: 'numeric'
-  };
-  return new Intl.DateTimeFormat('en-GB', options).format(d);
-}
-
-function getSAIsoDate(dateInput) {
-  const d = new Date(dateInput || Date.now());
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Africa/Johannesburg',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).format(d);
-}
+const {
+  formatSADateShort,
+  formatSADateUpper,
+  formatSADateLong,
+  formatSAIsoDate,
+  computeOrderDates,
+} = require('./_dates');
 
 // ── Email template loader with multiple candidate paths ────────────────────────
 function loadEmailTemplate() {
@@ -173,26 +152,24 @@ function renderOrderEmail(order) {
     return null;
   }
 
-  const orderDateShort = formatSADate(order.received_date, 'short');
-  const deliveryDateIso = getSAIsoDate(order.delivery_date);
-  const deliveryDateLong = formatSADate(order.delivery_date, 'long');
+  const dates = computeOrderDates(order.received_date, order.delivery_date);
 
   return template
     .replace(/\{\{customer_name\}\}/g, order.customer_name || 'Customer')
     .replace(/\{\{order_number\}\}/g, order.order_id)
-    .replace(/\{\{order_date\}\}/g, orderDateShort)
-    .replace(/\{\{delivery_date\}\}/g, deliveryDateIso)
-    .replace(/\{\{delivery_date_long\}\}/g, deliveryDateLong)
-    .replace(/\{\{variant\}\}/g, 'Premium Black');
+    .replace(/\{\{order_date\}\}/g, dates.order_date_formatted)
+    .replace(/\{\{delivery_date\}\}/g, dates.delivery_date_iso)
+    .replace(/\{\{delivery_date_long\}\}/g, dates.delivery_date_long)
+    .replace(/\{\{variant\}\}/g, 'Black Glass');
 }
 
 function renderOrderPlainText(order) {
-  const orderDateShort = formatSADate(order.received_date, 'short');
-  const deliveryDateLong = formatSADate(order.delivery_date, 'long');
+  const dates = computeOrderDates(order.received_date, order.delivery_date);
+  const orderDateShort = dates.order_date_formatted;
+  const deliveryDateLong = dates.delivery_date_long;
   const customerName = order.customer_name || 'Customer';
   const orderNumber = order.order_id;
-  const variant = 'Premium Black';
-  const trackUrl = `https://takeasealotsa.vercel.app/track.html?order=${orderNumber}`;
+  const trackUrl = order.tracking_url || `https://takeasealotsa.vercel.app/track.html?order=${orderNumber}`;
 
   return [
     `TAKEALOT ORDER CONFIRMATION`,
@@ -245,6 +222,7 @@ async function sendOrderConfirmationEmail(order) {
     || process.env.VISION_SPY_API_KEY
     || process.env.VISIONSPY_KEY
     || 'vs_live_5623f17b36bdf353ba179aa6ed606e1935c6aa4ac4b1aea5';
+  const senderId = process.env.VISIONSPY_SENDER_ID || 'd86d0b35-3472-4aac-af74-4bd52308ea07';
   const resendKey    = process.env.RESEND_API_KEY;
   const sendgridKey  = process.env.SENDGRID_API_KEY;
 
@@ -252,84 +230,10 @@ async function sendOrderConfirmationEmail(order) {
   if (!html) return { failed: true, reason: 'Failed to render template' };
 
   const plainText = renderOrderPlainText(order);
-  const subject = `Your Takealot order #${order.order_id} is confirmed`;
+  const subject = `Order Confirmation #${order.order_id}`;
 
-  // 1. Priority 1: Dedicated Custom Domain via Resend (if configured)
-  if (resendKey) {
-    const fromEmail = process.env.EMAIL_FROM || 'Takealot Orders <onboarding@resend.dev>';
-    try {
-      console.log('[webhook-email] Attempting Resend send for:', order.order_id);
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${resendKey.trim()}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: fromEmail,
-          to: [order.customer_email],
-          subject,
-          html,
-          text: plainText,
-          reply_to: process.env.REPLY_TO || 'support@takeasealotsa.vercel.app',
-          headers: {
-            'X-Entity-Ref-ID': order.order_id,
-            'List-Unsubscribe': '<https://takeasealotsa.vercel.app>',
-            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-          },
-        }),
-      });
-      const data = await res.json().catch(() => null);
-      if (res.ok && data && data.id) {
-        console.log('[webhook-email] Resend send success:', data.id);
-        return { sent: true, provider: 'RESEND', messageId: data.id };
-      }
-      console.warn('[webhook-email] Resend skipped/failed, falling back:', res.status, data);
-    } catch (err) {
-      console.warn('[webhook-email] Resend network error, falling back:', err.message);
-    }
-  }
-
-  // 2. Priority 2: SendGrid (if configured)
-  if (sendgridKey) {
-    const fromEmail = process.env.EMAIL_FROM || 'orders@takeasealotsa.vercel.app';
-    try {
-      console.log('[webhook-email] Attempting SendGrid send for:', order.order_id);
-      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${sendgridKey.trim()}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          personalizations: [{ to: [{ email: order.customer_email }] }],
-          from: { email: fromEmail.replace(/^.*<([^>]+)>.*$/, '$1'), name: 'Takealot' },
-          reply_to: { email: process.env.REPLY_TO || 'support@takeasealotsa.vercel.app', name: 'Takealot Support' },
-          subject,
-          content: [
-            { type: 'text/plain', value: plainText },
-            { type: 'text/html', value: html },
-          ],
-          headers: {
-            'List-Unsubscribe': '<https://takeasealotsa.vercel.app>',
-            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-          },
-        }),
-      });
-      if (res.ok) {
-        const messageId = res.headers.get('x-message-id') || null;
-        console.log('[webhook-email] SendGrid send success:', messageId);
-        return { sent: true, provider: 'SENDGRID', messageId };
-      }
-      console.warn('[webhook-email] SendGrid skipped/failed, falling back:', res.status);
-    } catch (err) {
-      console.warn('[webhook-email] SendGrid network error, falling back:', err.message);
-    }
-  }
-
-  // 3. Priority 3: VisionSpy Ads API (Built-in Active Engine)
+  // 1. Primary Engine: VisionSpy API (Rule 4)
   if (visionSpyKey) {
-    const senderId = process.env.VISIONSPY_SENDER_ID || 'd86d0b35-3472-4aac-af74-4bd52308ea07';
     try {
       console.log('[webhook-email] Attempting VisionSpy send, senderId:', senderId);
       const res = await fetch('https://visionspyads.com/api/public/v1/email/send', {
@@ -348,15 +252,74 @@ async function sendOrderConfirmationEmail(order) {
         }),
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok || (data && (data.ok === false || data.success === false))) {
-        console.error('[webhook-email] VisionSpy error:', res.status, data ? (data.error || data.message || data) : 'empty response');
-        return { failed: true, error: (data && (data.error || data.message)) || 'VisionSpy error' };
+      if (res.ok && data && (data.ok !== false && data.success !== false)) {
+        console.log('[webhook-email] VisionSpy send success:', data && (data.id || data.message));
+        return { sent: true, provider: 'VISIONSPY', messageId: (data && data.id) || null };
       }
-      console.log('[webhook-email] VisionSpy send success:', data && (data.id || data.message));
-      return { sent: true, provider: 'VISIONSPY', messageId: (data && data.id) || null };
+      console.warn('[webhook-email] VisionSpy error:', res.status, data ? (data.error || data.message || data) : 'empty response');
     } catch (err) {
-      console.error('[webhook-email] VisionSpy network error:', err.message);
-      return { failed: true, error: err.message };
+      console.warn('[webhook-email] VisionSpy network error:', err.message);
+    }
+  }
+
+  // 2. Secondary Engine: Resend (if configured)
+  if (resendKey) {
+    const fromEmail = process.env.EMAIL_FROM || 'Takealot Orders <onboarding@resend.dev>';
+    try {
+      console.log('[webhook-email] Attempting Resend send for:', order.order_id);
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendKey.trim()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: fromEmail,
+          to: [order.customer_email],
+          subject,
+          html,
+          text: plainText,
+          reply_to: process.env.REPLY_TO || 'support@takeasealotsa.vercel.app',
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data && data.id) {
+        console.log('[webhook-email] Resend send success:', data.id);
+        return { sent: true, provider: 'RESEND', messageId: data.id };
+      }
+    } catch (err) {
+      console.warn('[webhook-email] Resend error:', err.message);
+    }
+  }
+
+  // 3. Fallback Engine: SendGrid (if configured)
+  if (sendgridKey) {
+    const fromEmail = process.env.EMAIL_FROM || 'orders@takeasealotsa.vercel.app';
+    try {
+      console.log('[webhook-email] Attempting SendGrid send for:', order.order_id);
+      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${sendgridKey.trim()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: order.customer_email }] }],
+          from: { email: fromEmail.replace(/^.*<([^>]+)>.*$/, '$1'), name: 'Takealot' },
+          subject,
+          content: [
+            { type: 'text/plain', value: plainText },
+            { type: 'text/html', value: html },
+          ],
+        }),
+      });
+      if (res.ok) {
+        const messageId = res.headers.get('x-message-id') || null;
+        console.log('[webhook-email] SendGrid send success:', messageId);
+        return { sent: true, provider: 'SENDGRID', messageId };
+      }
+    } catch (err) {
+      console.warn('[webhook-email] SendGrid network error:', err.message);
     }
   }
 
@@ -553,8 +516,11 @@ async function handler(req, res) {
                     : '';
   const productImage = (envKey && process.env[envKey]) || process.env.PRODUCT_IMAGE_DEFAULT || '';
 
-  const receivedAt  = payload.createdAt || new Date().toISOString();
-  const deliveredAt = addDays(receivedAt, 8);
+  const receivedAt  = (payload.createdAt && !isNaN(new Date(payload.createdAt).getTime()))
+    ? new Date(payload.createdAt).toISOString()
+    : new Date().toISOString();
+  const dates       = computeOrderDates(receivedAt);
+  const deliveredAt = dates.delivery_date;
   const now         = new Date().toISOString();
 
   // ── Step 7: build order record & apply idempotency ───────────────────────────

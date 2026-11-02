@@ -4,6 +4,12 @@
       "includeFiles": "email.index"
     }
   },
+  "crons": [
+    {
+      "path": "/api/cron",
+      "schedule": "0 8 * * *"
+    }
+  ],
   "rewrites": [
     { "source": "/success", "destination": "/sucess.html" },
     { "source": "/success.html", "destination": "/sucess.html" },

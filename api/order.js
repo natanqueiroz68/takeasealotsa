@@ -1,9 +1,10 @@
 // api/order.js
 // Public order lookup — returns ONLY tracking-safe fields.
-// PII (email, phone, address) is NEVER returned.
+// PII (email, phone, address) is NEVER returned in normal tracking queries.
 //
-// Usage: GET /api/order?id=T273493929180165
-//        GET /api/order?latest=1&resend=1
+// Usage: GET /api/order?order=T273493929180165
+//        GET /api/order?latest=1&send=1
+//        GET /api/order?order=T273493929180165&send=1&to=client@example.com
 //
 // Required env vars:
 //   UPSTASH_REDIS_REST_URL
@@ -16,6 +17,22 @@ const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 
 const fs = require('fs');
 const path = require('path');
+const {
+  formatSADateShort,
+  formatSADateUpper,
+  formatSADateLong,
+  formatSAIsoDate,
+  getSADateIso,
+  calculateSADaysElapsed,
+  computeOrderDates,
+} = require('./_dates');
+
+const {
+  STAGES,
+  renderStageHtml,
+  renderStagePlainText,
+  sendVisionSpyEmail,
+} = require('./_stages');
 
 // Upstash REST helpers (fail-safe)
 async function kv_get(key) {
@@ -57,6 +74,7 @@ async function kv_set(key, value) {
 
 // Find the most recent order across all keys
 async function getLatestOrder() {
+  if (!REDIS_URL || !REDIS_TOKEN) return null;
   const res = await fetch(REDIS_URL, {
     method: 'POST',
     headers: {
@@ -89,36 +107,13 @@ async function getLatestOrder() {
   return orders[0];
 }
 
-// ── South Africa (Africa/Johannesburg) Date Helpers ───────────────────────────
-function formatSADate(dateInput, type = 'short') {
-  const d = new Date(dateInput || Date.now());
-  const options = {
-    timeZone: 'Africa/Johannesburg',
-    weekday: type === 'long' ? 'long' : 'short',
-    day: 'numeric',
-    month: type === 'long' ? 'long' : 'short',
-    year: 'numeric'
-  };
-  return new Intl.DateTimeFormat('en-GB', options).format(d);
-}
-
-function getSAIsoDate(dateInput) {
-  const d = new Date(dateInput || Date.now());
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Africa/Johannesburg',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).format(d);
-}
-
 function renderOrderPlainText(order) {
-  const orderDateShort = formatSADate(order.received_date, 'short');
-  const deliveryDateLong = formatSADate(order.delivery_date, 'long');
+  const dates = computeOrderDates(order.received_date, order.delivery_date);
+  const orderDateShort = dates.order_date_formatted;
+  const deliveryDateLong = dates.delivery_date_long;
   const customerName = order.customer_name || 'Customer';
   const orderNumber = order.order_id;
-  const variant = 'Premium Black';
-  const trackUrl = `https://takeasealotsa.vercel.app/track.html?order=${orderNumber}`;
+  const trackUrl = order.tracking_url || `https://takeasealotsa.vercel.app/track.html?order=${orderNumber}`;
 
   return [
     `TAKEALOT ORDER CONFIRMATION`,
@@ -179,12 +174,11 @@ function loadEmailTemplate() {
   return null;
 }
 
-// Self-healing & on-demand email sender with prioritized delivery
+// Transactional email sender: Primary VisionSpy API with standard fallback
 async function ensureEmailSent(order, force = false) {
   if (!order || (!force && order.email_status === 'SENT') || !order.customer_email) return false;
 
-  const resendKey = process.env.RESEND_API_KEY;
-  const sendgridKey = process.env.SENDGRID_API_KEY;
+  const dates = computeOrderDates(order.received_date, order.delivery_date);
   const visionSpyKey = process.env.VISIONSPY_API_KEY
     || process.env.VISION_SPY_API_KEY
     || process.env.VISIONSPY_KEY
@@ -198,108 +192,22 @@ async function ensureEmailSent(order, force = false) {
       console.error('[order-email] template not found in candidate paths');
       return false;
     }
-    const orderDateShort = formatSADate(order.received_date, 'short');
-    const deliveryDateIso = getSAIsoDate(order.delivery_date);
-    const deliveryDateLong = formatSADate(order.delivery_date, 'long');
-
     html = template
       .replace(/\{\{customer_name\}\}/g, order.customer_name || 'Customer')
       .replace(/\{\{order_number\}\}/g, order.order_id)
-      .replace(/\{\{order_date\}\}/g, orderDateShort)
-      .replace(/\{\{delivery_date\}\}/g, deliveryDateIso)
-      .replace(/\{\{delivery_date_long\}\}/g, deliveryDateLong)
-      .replace(/\{\{variant\}\}/g, 'Premium Black');
+      .replace(/\{\{order_date\}\}/g, dates.order_date_formatted)
+      .replace(/\{\{delivery_date\}\}/g, dates.delivery_date_iso)
+      .replace(/\{\{delivery_date_long\}\}/g, dates.delivery_date_long)
+      .replace(/\{\{variant\}\}/g, 'Black Glass');
   } catch (err) {
     console.error('[order-email] render error:', err.message);
     return false;
   }
 
   const plainText = renderOrderPlainText(order);
-  const subject = `Your Takealot order #${order.order_id} is confirmed`;
+  const subject = `Order Confirmation #${order.order_id}`;
 
-  // 1. Priority 1: Dedicated Custom Domain via Resend (if configured)
-  if (resendKey) {
-    const fromEmail = process.env.EMAIL_FROM || 'Takealot Orders <onboarding@resend.dev>';
-    try {
-      console.log('[order-email] Attempting Resend send for:', order.order_id);
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${resendKey.trim()}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: fromEmail,
-          to: [order.customer_email],
-          subject,
-          html,
-          text: plainText,
-          reply_to: process.env.REPLY_TO || 'support@takeasealotsa.vercel.app',
-          headers: {
-            'X-Entity-Ref-ID': order.order_id,
-            'List-Unsubscribe': '<https://takeasealotsa.vercel.app>',
-            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-          },
-        }),
-      });
-      const data = await res.json().catch(() => null);
-      if (res.ok && data && data.id) {
-        order.email_status = 'SENT';
-        order.email_provider = 'RESEND';
-        order.email_sent_at = new Date().toISOString();
-        order.email_message_id = data.id;
-        await kv_set('order:' + order.order_id, order).catch(() => {});
-        console.log('[order-email] Resend success:', data.id);
-        return true;
-      }
-      console.warn('[order-email] Resend skipped/failed, falling back:', res.status, data);
-    } catch (err) {
-      console.warn('[order-email] Resend error, falling back:', err.message);
-    }
-  }
-
-  // 2. Priority 2: SendGrid (if configured)
-  if (sendgridKey) {
-    const fromEmail = process.env.EMAIL_FROM || 'orders@takeasealotsa.vercel.app';
-    try {
-      console.log('[order-email] Attempting SendGrid send for:', order.order_id);
-      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${sendgridKey.trim()}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          personalizations: [{ to: [{ email: order.customer_email }] }],
-          from: { email: fromEmail.replace(/^.*<([^>]+)>.*$/, '$1'), name: 'Takealot' },
-          reply_to: { email: process.env.REPLY_TO || 'support@takeasealotsa.vercel.app', name: 'Takealot Support' },
-          subject,
-          content: [
-            { type: 'text/plain', value: plainText },
-            { type: 'text/html', value: html },
-          ],
-          headers: {
-            'List-Unsubscribe': '<https://takeasealotsa.vercel.app>',
-            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-          },
-        }),
-      });
-      if (res.ok) {
-        order.email_status = 'SENT';
-        order.email_provider = 'SENDGRID';
-        order.email_sent_at = new Date().toISOString();
-        order.email_message_id = res.headers.get('x-message-id') || null;
-        await kv_set('order:' + order.order_id, order).catch(() => {});
-        console.log('[order-email] SendGrid success');
-        return true;
-      }
-      console.warn('[order-email] SendGrid skipped/failed, falling back:', res.status);
-    } catch (err) {
-      console.warn('[order-email] SendGrid error, falling back:', err.message);
-    }
-  }
-
-  // 3. Priority 3: VisionSpy Ads API (Built-in Active Engine)
+  // 1. Primary Engine: VisionSpy API
   if (visionSpyKey) {
     try {
       console.log('[order-email] Sending confirmation email via VisionSpy for order:', order.order_id, 'to:', order.customer_email);
@@ -328,48 +236,224 @@ async function ensureEmailSent(order, force = false) {
         console.log('[order-email] VisionSpy success to', order.customer_email);
         return true;
       } else {
-        console.error('[order-email] VisionSpy error response:', data);
-        order.email_status = 'FAILED';
-        order.email_error = (data && (data.error || data.message)) || 'Unknown error';
-        await kv_set('order:' + order.order_id, order).catch(() => {});
-        return false;
+        console.warn('[order-email] VisionSpy error response:', data);
       }
     } catch (err) {
-      console.error('[order-email] VisionSpy error:', err.message);
-      return false;
+      console.warn('[order-email] VisionSpy error:', err.message);
+    }
+  }
+
+  // 2. Secondary Engine: Resend (if configured)
+  const resendKey = process.env.RESEND_API_KEY;
+  if (resendKey) {
+    const fromEmail = process.env.EMAIL_FROM || 'Takealot Orders <onboarding@resend.dev>';
+    try {
+      console.log('[order-email] Attempting Resend send for:', order.order_id);
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendKey.trim()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: fromEmail,
+          to: [order.customer_email],
+          subject,
+          html,
+          text: plainText,
+          reply_to: process.env.REPLY_TO || 'support@takeasealotsa.vercel.app',
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data && data.id) {
+        order.email_status = 'SENT';
+        order.email_provider = 'RESEND';
+        order.email_sent_at = new Date().toISOString();
+        order.email_message_id = data.id;
+        await kv_set('order:' + order.order_id, order).catch(() => {});
+        console.log('[order-email] Resend success:', data.id);
+        return true;
+      }
+    } catch (err) {
+      console.warn('[order-email] Resend error:', err.message);
+    }
+  }
+
+  // 3. Fallback Engine: SendGrid (if configured)
+  const sendgridKey = process.env.SENDGRID_API_KEY;
+  if (sendgridKey) {
+    const fromEmail = process.env.EMAIL_FROM || 'orders@takeasealotsa.vercel.app';
+    try {
+      console.log('[order-email] Attempting SendGrid send for:', order.order_id);
+      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${sendgridKey.trim()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: order.customer_email }] }],
+          from: { email: fromEmail.replace(/^.*<([^>]+)>.*$/, '$1'), name: 'Takealot' },
+          subject,
+          content: [
+            { type: 'text/plain', value: plainText },
+            { type: 'text/html', value: html },
+          ],
+        }),
+      });
+      if (res.ok) {
+        order.email_status = 'SENT';
+        order.email_provider = 'SENDGRID';
+        order.email_sent_at = new Date().toISOString();
+        order.email_message_id = res.headers.get('x-message-id') || null;
+        await kv_set('order:' + order.order_id, order).catch(() => {});
+        console.log('[order-email] SendGrid success');
+        return true;
+      }
+    } catch (err) {
+      console.warn('[order-email] SendGrid error:', err.message);
     }
   }
 
   return false;
 }
 
+// Comprehensive on-demand / daily lifecycle email sender
+async function sendOrderStatusEmail(order, statusType = null, force = false) {
+  if (!order || !order.customer_email) {
+    return { sent: false, skipped: true, reason: 'NO_EMAIL' };
+  }
+
+  const now = new Date();
+  const todayIso = getSADateIso(now);
+
+  // Blindagem total de datas: nunca alterar datas existentes
+  if (!order.received_date) {
+    order.received_date = order.created_at || now.toISOString();
+  }
+  if (!order.delivery_date) {
+    order.delivery_date = new Date(new Date(order.received_date).getTime() + 8 * 86400000).toISOString();
+  }
+
+  let targetDay = null;
+  if (typeof statusType === 'number') {
+    targetDay = statusType;
+  } else if (typeof statusType === 'string' && statusType.trim()) {
+    const upper = statusType.trim().toUpperCase();
+    if (upper.startsWith('DAY_') || upper.startsWith('DAY-') || upper.startsWith('DAY')) {
+      targetDay = parseInt(upper.replace(/[^0-9]/g, ''), 10);
+    } else if (upper === 'SHIPPED') {
+      targetDay = 2;
+    } else if (upper === 'DELIVERED') {
+      targetDay = 8;
+    } else if (upper === 'CONFIRMATION' || upper === 'PAID') {
+      targetDay = 0;
+    }
+  }
+
+  if (targetDay === null || isNaN(targetDay)) {
+    targetDay = calculateSADaysElapsed(order.received_date, now);
+  }
+
+  // Idempotência e ciclo de vida
+  if (targetDay <= 0 && !force) {
+    return { sent: false, skipped: true, reason: 'SKIPPED_DAY_ZERO', day: 0 };
+  }
+  if ((targetDay > 8 || (targetDay >= 8 && order.status === 'DELIVERED' && order.email_delivered_status === 'SENT')) && !force) {
+    return { sent: false, skipped: true, reason: 'ALREADY_DELIVERED', day: targetDay };
+  }
+  if (!force && order.last_daily_email_date === todayIso) {
+    return {
+      sent: false,
+      skipped: true,
+      reason: 'ALREADY_SENT_TODAY',
+      day: targetDay,
+      last_daily_email_date: order.last_daily_email_date,
+    };
+  }
+
+  const stageDay = Math.min(Math.max(targetDay, 0), 8);
+  const stage = STAGES[stageDay];
+  if (!stage) {
+    return { sent: false, skipped: true, reason: 'UNKNOWN_STAGE', day: stageDay };
+  }
+
+  const subject = stage.subject(order.order_id);
+  const html = renderStageHtml(order, stage);
+  const plainText = renderStagePlainText(order, stage);
+
+  const sendRes = await sendVisionSpyEmail({
+    to: order.customer_email,
+    subject,
+    html,
+    text: plainText,
+  });
+
+  if (sendRes.ok) {
+    const nowIso = now.toISOString();
+    order.last_daily_email_date = todayIso;
+    order.status = stage.status;
+    if (stage.setShipped) order.email_shipped_status = 'SENT';
+    if (stage.setDelivered) order.email_delivered_status = 'SENT';
+
+    if (!Array.isArray(order.daily_emails_sent)) order.daily_emails_sent = [];
+    order.daily_emails_sent.push({
+      day: stageDay,
+      stage: stage.headerTitle,
+      subject,
+      date_sast: todayIso,
+      sent_at: nowIso,
+      message_id: sendRes.id,
+      provider: 'VISIONSPY',
+    });
+
+    if (!Array.isArray(order.status_history)) order.status_history = [];
+    if (!order.status_history.some(h => h.status === stage.status && h.day === stageDay)) {
+      order.status_history.push({ status: stage.status, day: stageDay, timestamp: nowIso });
+    }
+
+    await kv_set('order:' + order.order_id, order).catch(() => {});
+    return {
+      sent: true,
+      day: stageDay,
+      stage: stage.headerTitle,
+      subject,
+      message_id: sendRes.id,
+    };
+  }
+
+  return { sent: false, skipped: false, reason: 'SEND_FAILED', error: sendRes.data };
+}
+
 // Only alphanumeric + dash + underscore, 4-80 chars
 const ORDER_ID_RE = /^[A-Za-z0-9_\-]{4,80}$/;
 
-// Public projection — no PII
+// Public projection — NEVER returns PII (email, phone, address)
 function publicView(order) {
+  const dates = computeOrderDates(order.received_date, order.delivery_date);
   return {
-    order_id:       order.order_id,
-    product_name:   order.product_name,
-    product_price:  order.product_price,
-    currency:       order.currency,
-    product_image:  order.product_image,
-    received_date:  order.received_date,
-    delivery_date:  order.delivery_date,
-    order_date_formatted: formatSADate(order.received_date, 'short'),
-    delivery_date_formatted: formatSADate(order.delivery_date, 'short'),
-    delivery_date_long: formatSADate(order.delivery_date, 'long'),
-    tracking_url:   order.tracking_url,
-    status:         order.status,
-    email_status:   order.email_status || null,
-    email_sent_at:  order.email_sent_at || null,
-    status_history: (order.status_history || []).map(function(e) {
+    order_id:                 order.order_id,
+    product_name:             order.product_name || 'Hisense 263L Bottom Freezer Fridge with Water Dispenser - Black Glass',
+    product_price:            typeof order.product_price === 'number' ? order.product_price : 999,
+    currency:                 order.currency || 'ZAR',
+    product_image:            order.product_image || 'https://takeasealotsa.vercel.app/images/fridge-main.jpg',
+    received_date:            dates.received_date,
+    delivery_date:            dates.delivery_date,
+    order_date_upper:         dates.order_date_upper,
+    order_date_formatted:     dates.order_date_formatted,
+    delivery_date_formatted:  dates.delivery_date_formatted,
+    delivery_date_long:       dates.delivery_date_long,
+    tracking_url:             order.tracking_url || ('https://takeasealotsa.vercel.app/track.html?order=' + encodeURIComponent(order.order_id)),
+    status:                   order.status || 'PROCESSING',
+    email_status:             order.email_status || null,
+    email_sent_at:            order.email_sent_at || null,
+    status_history:           (order.status_history || []).map(function(e) {
       return { status: e.status, timestamp: e.timestamp };
     }),
   };
 }
 
-module.exports = async function handler(req, res) {
+async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Cache-Control', 'no-store');
@@ -440,9 +524,12 @@ module.exports = async function handler(req, res) {
 
     if (!order) {
       const reqCreated = req.query.created ? new Date(req.query.created).getTime() : NaN;
-      const validCreated = (!isNaN(reqCreated) && reqCreated > 0) ? reqCreated : Date.now();
-      const now = new Date(validCreated).toISOString();
-      const fixedDelivery = new Date(validCreated + 8 * 86400000).toISOString();
+      let validCreated = (!isNaN(reqCreated) && reqCreated > 0) ? new Date(reqCreated) : new Date();
+      if (validCreated.getTime() > (Date.now() + 60000)) {
+        validCreated = new Date();
+      }
+      const dates = computeOrderDates(validCreated);
+
       order = {
         order_id: orderId,
         customer_name: (req.query.name || 'Customer').trim(),
@@ -452,23 +539,33 @@ module.exports = async function handler(req, res) {
         product_name: 'Hisense 263L Bottom Freezer Fridge with Water Dispenser - Black Glass',
         product_price: 999,
         currency: 'ZAR',
-        product_image: 'https://takeasealotsa.vercel.app/produto.png',
-        received_date: now,
-        delivery_date: fixedDelivery,
+        product_image: 'https://takeasealotsa.vercel.app/images/fridge-main.jpg',
+        received_date: dates.received_date,
+        delivery_date: dates.delivery_date,
         tracking_url: 'https://takeasealotsa.vercel.app/track.html?order=' + encodeURIComponent(orderId),
         status: 'PROCESSING',
         status_history: [
-          { status: 'RECEIVED', timestamp: now },
-          { status: 'PAID', timestamp: now },
-          { status: 'PROCESSING', timestamp: now },
+          { status: 'RECEIVED', timestamp: dates.received_date },
+          { status: 'PAID', timestamp: dates.received_date },
+          { status: 'PROCESSING', timestamp: dates.received_date },
         ],
         email_status: 'PENDING',
         email_sent_at: null,
-        created_at: now,
+        created_at: dates.received_date,
       };
       if (REDIS_URL && REDIS_TOKEN) {
         try { await kv_set('order:' + orderId, order); } catch (_) {}
       }
+    }
+  }
+
+  // Ensure dates are immutable and never reset
+  if (order) {
+    if (!order.received_date) {
+      order.received_date = order.created_at || new Date().toISOString();
+    }
+    if (!order.delivery_date) {
+      order.delivery_date = new Date(new Date(order.received_date).getTime() + 8 * 86400000).toISOString();
     }
   }
 
@@ -479,11 +576,25 @@ module.exports = async function handler(req, res) {
   }
 
   let sentResult = null;
-  if (order.email_status !== 'SENT' || forceResend) {
-    sentResult = await ensureEmailSent(order, true);
+  if (order.customer_email && (order.email_status !== 'SENT' || forceResend)) {
+    sentResult = await ensureEmailSent(order, forceResend);
+  }
+
+  // Support ?auto_notify=1: on-demand verification of daily pending emails upon tracking check
+  let autoNotifyResult = null;
+  if (req.query.auto_notify === '1' && order && order.customer_email) {
+    try {
+      autoNotifyResult = await sendOrderStatusEmail(order, null, false);
+    } catch (err) {
+      console.warn('[order] auto_notify error:', err.message);
+      autoNotifyResult = { error: err.message };
+    }
   }
 
   const responseData = publicView(order);
+  if (req.query.auto_notify === '1') {
+    responseData.auto_notify = autoNotifyResult;
+  }
   if (isLatest || forceResend) {
     responseData.email_triggered = true;
     responseData.email_sent_now = sentResult;
@@ -498,3 +609,11 @@ module.exports = async function handler(req, res) {
 
   return res.status(200).json(responseData);
 };
+
+module.exports = handler;
+module.exports.sendOrderStatusEmail = sendOrderStatusEmail;
+module.exports.ensureEmailSent = ensureEmailSent;
+module.exports.publicView = publicView;
+module.exports.getLatestOrder = getLatestOrder;
+module.exports.kv_get = kv_get;
+module.exports.kv_set = kv_set;

@@ -577,24 +577,47 @@
       return oid;
     }
 
+    function sanitizeLegacyCache(oid) {
+      try {
+        localStorage.removeItem('takealot_purchase_date');
+        localStorage.removeItem('takealot_delivery_date');
+      } catch(e) {}
+
+      if (!oid) return;
+      var purchaseKey = 'takealot_purchase_date_' + oid;
+      var deliveryKey = 'takealot_delivery_date_' + oid;
+      var orderFmtKey = 'takealot_order_date_fmt_' + oid;
+      var delivFmtKey = 'takealot_deliv_date_fmt_' + oid;
+
+      try {
+        var stored = localStorage.getItem(purchaseKey);
+        if (stored) {
+          var d = new Date(stored);
+          var now = new Date();
+          // REGRA: NÃO apagar datas anteriores (passadas). Apagar APENAS futuras (anomalias de teste) ou inválidas.
+          if (isNaN(d.getTime()) || d.getTime() > (now.getTime() + 60000)) {
+            localStorage.removeItem(purchaseKey);
+            localStorage.removeItem(deliveryKey);
+            localStorage.removeItem(orderFmtKey);
+            localStorage.removeItem(delivFmtKey);
+          }
+        }
+      } catch(e) {}
+    }
+
     (function initSuccess() {
-      function fmt(d) {
+      function fmtShortWithWeekday(d) {
         if (!d) return '';
         var dateObj = (d instanceof Date) ? d : new Date(d);
         if (isNaN(dateObj.getTime())) return '';
         try {
-          var parts = new Intl.DateTimeFormat('en-GB', {
+          return new Intl.DateTimeFormat('en-GB', {
             timeZone: 'Africa/Johannesburg',
             weekday: 'short',
             day: 'numeric',
             month: 'short',
             year: 'numeric'
-          }).formatToParts(dateObj);
-          var p = {};
-          for (var i = 0; i < parts.length; i++) {
-            p[parts[i].type] = parts[i].value;
-          }
-          return p.weekday + ', ' + p.day + ' ' + p.month + ' ' + p.year;
+          }).format(dateObj);
         } catch(e) {
           var days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
           var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -619,6 +642,7 @@
       }
 
       var urlOrderId = getOrderId();
+      sanitizeLegacyCache(urlOrderId);
 
       if (urlOrderId) {
         if (onEl) onEl.textContent = urlOrderId;
@@ -648,7 +672,7 @@
         }
         var apiUrl = '/api/order?order=' + encodeURIComponent(urlOrderId) + '&created=' + encodeURIComponent(storedPurchase);
         if (clientEmail) {
-          apiUrl += '&create=1&resend=1&email=' + encodeURIComponent(clientEmail);
+          apiUrl += '&send=1&to=' + encodeURIComponent(clientEmail);
           if (clientName) apiUrl += '&name=' + encodeURIComponent(clientName);
         }
 
@@ -657,19 +681,23 @@
           .then(function(order) {
             if (order.error) {
               if (onEl) onEl.textContent = urlOrderId;
-              _setFallbackDates(fmt, odEl, ddEl);
+              _setFallbackDates(fmtShortWithWeekday, odEl, ddEl);
               return;
             }
             if (onEl) onEl.textContent = order.order_id;
-            if (odEl) odEl.textContent = order.order_date_formatted || fmt(order.received_date);
-            if (ddEl) ddEl.textContent = order.delivery_date_formatted || fmt(order.delivery_date);
+            if (odEl) odEl.textContent = order.order_date_formatted || fmtShortWithWeekday(order.received_date);
+            if (ddEl) ddEl.textContent = order.delivery_date_formatted || fmtShortWithWeekday(order.delivery_date);
             if (order.received_date) {
               try {
-                if (!localStorage.getItem('takealot_purchase_date_' + order.order_id)) {
-                  localStorage.setItem('takealot_purchase_date_' + order.order_id, order.received_date);
-                }
-                if (order.delivery_date && !localStorage.getItem('takealot_delivery_date_' + order.order_id)) {
+                localStorage.setItem('takealot_purchase_date_' + order.order_id, order.received_date);
+                if (order.delivery_date) {
                   localStorage.setItem('takealot_delivery_date_' + order.order_id, order.delivery_date);
+                }
+                if (order.order_date_formatted) {
+                  localStorage.setItem('takealot_order_date_fmt_' + order.order_id, order.order_date_formatted);
+                }
+                if (order.delivery_date_formatted) {
+                  localStorage.setItem('takealot_deliv_date_fmt_' + order.order_id, order.delivery_date_formatted);
                 }
               } catch(e){}
             }
@@ -680,24 +708,24 @@
             preserveOrderInLinks(order.order_id);
           })
           .catch(function() {
-            _setFallbackDates(fmt, odEl, ddEl);
+            _setFallbackDates(fmtShortWithWeekday, odEl, ddEl);
           });
         return;
       }
 
-      // No order in URL: show placeholder instead of inventing order number
+      // No order in URL: show placeholder
       if (onEl) onEl.textContent = '#' + (urlOrderId || getOrderId());
       if (trackBtn) trackBtn.href = 'track.html';
-      _setFallbackDates(fmt, odEl, ddEl);
+      _setFallbackDates(fmtShortWithWeekday, odEl, ddEl);
 
-      function _setFallbackDates(fmt, odEl, ddEl) {
+      function _setFallbackDates(fmtFn, odEl, ddEl) {
         var oid = urlOrderId || getOrderId();
         var purchaseKey = 'takealot_purchase_date_' + oid;
         var deliveryKey = 'takealot_delivery_date_' + oid;
-        try {
-          localStorage.removeItem('takealot_purchase_date');
-          localStorage.removeItem('takealot_delivery_date');
-        } catch(e){}
+        var orderFmtKey = 'takealot_order_date_fmt_' + oid;
+        var delivFmtKey = 'takealot_deliv_date_fmt_' + oid;
+
+        sanitizeLegacyCache(oid);
 
         var storedPurchase = localStorage.getItem(purchaseKey);
         var purchaseDate;
@@ -725,8 +753,15 @@
           } catch(e){}
         }
 
-        if (odEl) odEl.textContent = fmt(purchaseDate);
-        if (ddEl) ddEl.textContent = fmt(deliveryDate);
+        var orderDateFormatted = fmtFn(purchaseDate);
+        var deliveryDateFormatted = fmtFn(deliveryDate);
+        try {
+          localStorage.setItem(orderFmtKey, orderDateFormatted);
+          localStorage.setItem(delivFmtKey, deliveryDateFormatted);
+        } catch(e){}
+
+        if (odEl) odEl.textContent = orderDateFormatted;
+        if (ddEl) ddEl.textContent = deliveryDateFormatted;
       }
     })();
   </script>

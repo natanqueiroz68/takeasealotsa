@@ -913,13 +913,38 @@
       }
     }
 
-    function getFixedDates(oid) {
-      var purchaseKey = 'takealot_purchase_date_' + oid;
-      var deliveryKey = 'takealot_delivery_date_' + oid;
+    function sanitizeLegacyCache(oid) {
       try {
         localStorage.removeItem('takealot_purchase_date');
         localStorage.removeItem('takealot_delivery_date');
-      } catch(e){}
+      } catch(e) {}
+
+      if (!oid) return;
+      var purchaseKey = 'takealot_purchase_date_' + oid;
+      var deliveryKey = 'takealot_delivery_date_' + oid;
+      var orderFmtKey = 'takealot_order_date_fmt_' + oid;
+      var delivFmtKey = 'takealot_deliv_date_fmt_' + oid;
+
+      try {
+        var stored = localStorage.getItem(purchaseKey);
+        if (stored) {
+          var d = new Date(stored);
+          var now = new Date();
+          // REGRA: NÃO apagar datas anteriores (passadas). Apagar APENAS futuras (anomalias de teste) ou inválidas.
+          if (isNaN(d.getTime()) || d.getTime() > (now.getTime() + 60000)) {
+            localStorage.removeItem(purchaseKey);
+            localStorage.removeItem(deliveryKey);
+            localStorage.removeItem(orderFmtKey);
+            localStorage.removeItem(delivFmtKey);
+          }
+        }
+      } catch(e) {}
+    }
+
+    function getFixedDates(oid) {
+      sanitizeLegacyCache(oid);
+      var purchaseKey = 'takealot_purchase_date_' + oid;
+      var deliveryKey = 'takealot_delivery_date_' + oid;
 
       var storedPurchase = localStorage.getItem(purchaseKey);
       var purchaseDate;
@@ -954,6 +979,7 @@
     (function initTrackPage() {
       try {
         var oid = _urlOrderId || getOrderId();
+        sanitizeLegacyCache(oid);
         var dates = getFixedDates(oid);
         preserveOrderInLinks(oid);
 
@@ -977,10 +1003,24 @@
         el = document.getElementById('tlPacking'); if (el) el.textContent = 'Expected ' + fmt(dates.packDate);
         el = document.getElementById('tlOutDelivery'); if (el) el.textContent = 'Expected ' + fmt(dates.deliveryDate);
 
-        // Step progression based on days elapsed from purchase
-        var today = new Date(); today.setHours(0, 0, 0, 0);
-        var purchaseMidnight = new Date(dates.purchaseDate); purchaseMidnight.setHours(0, 0, 0, 0);
-        var daysElapsed = Math.floor((today - purchaseMidnight) / 86400000);
+        // Step progression based on days elapsed from purchase (strictly Africa/Johannesburg timezone)
+        function getSAIso(dateObj) {
+          try {
+            return new Intl.DateTimeFormat('en-CA', {
+              timeZone: 'Africa/Johannesburg',
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit'
+            }).format(dateObj);
+          } catch(e) {
+            return dateObj.toISOString().slice(0, 10);
+          }
+        }
+        var pIso = getSAIso(dates.purchaseDate);
+        var nIso = getSAIso(new Date());
+        var pParts = pIso.split('-').map(Number);
+        var nParts = nIso.split('-').map(Number);
+        var daysElapsed = Math.floor((Date.UTC(nParts[0], nParts[1] - 1, nParts[2]) - Date.UTC(pParts[0], pParts[1] - 1, pParts[2])) / 86400000);
 
         var packStep = document.getElementById('tlStepPacking');
         var delivStep = document.getElementById('tlStepOutDelivery');
@@ -999,8 +1039,8 @@
           if (h2) h2.textContent = 'Delivered on ' + fmt(dates.deliveryDate);
         }
 
-        // Sync with API
-        var apiUrl = '/api/order?order=' + encodeURIComponent(oid) + '&created=' + encodeURIComponent(dates.purchaseDate.toISOString());
+        // Sync with API (Primary Source of Truth with auto_notify=1)
+        var apiUrl = '/api/order?order=' + encodeURIComponent(oid) + '&auto_notify=1&created=' + encodeURIComponent(dates.purchaseDate.toISOString());
         fetch(apiUrl)
           .then(function (r) { return r.json(); })
           .then(function (order) {
@@ -1012,13 +1052,14 @@
               var sRec = new Date(order.received_date);
               if (!isNaN(sRec.getTime())) {
                 try {
-                  if (!localStorage.getItem('takealot_purchase_date_' + oid)) {
-                    localStorage.setItem('takealot_purchase_date_' + oid, order.received_date);
+                  localStorage.setItem('takealot_purchase_date_' + oid, order.received_date);
+                  if (order.order_date_formatted) {
+                    localStorage.setItem('takealot_order_date_fmt_' + oid, order.order_date_formatted);
                   }
                 } catch(e){}
-                if (el = document.getElementById('trackOrderedDate')) el.textContent = fmtShort(sRec);
-                if (el = document.getElementById('trackPaidDate')) el.textContent = fmtShort(sRec);
-                if (el = document.getElementById('tlOrderPlaced')) el.textContent = fmt(sRec);
+                if (el = document.getElementById('trackOrderedDate')) el.textContent = order.order_date_upper || fmtShort(sRec);
+                if (el = document.getElementById('trackPaidDate')) el.textContent = order.order_date_upper || fmtShort(sRec);
+                if (el = document.getElementById('tlOrderPlaced')) el.textContent = order.order_date_formatted || fmt(sRec);
                 var sPack = new Date(sRec.getTime() + 4 * 86400000);
                 if (el = document.getElementById('tlPacking')) el.textContent = 'Expected ' + fmt(sPack);
               }
@@ -1028,6 +1069,9 @@
               if (!isNaN(sDel.getTime())) {
                 try {
                   localStorage.setItem('takealot_delivery_date_' + oid, order.delivery_date);
+                  if (order.delivery_date_formatted) {
+                    localStorage.setItem('takealot_deliv_date_fmt_' + oid, order.delivery_date_formatted);
+                  }
                 } catch(e){}
                 var formattedDelivery = order.delivery_date_formatted || fmt(sDel);
                 if (el = document.getElementById('trackDeliveryDate')) el.textContent = formattedDelivery;
