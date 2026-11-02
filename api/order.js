@@ -17,12 +17,15 @@ const REDIS_URL   = process.env.UPSTASH_REDIS_REST_KV_REST_API_URL
   || process.env.KV_REST_API_URL
   || process.env.UPSTASH_REDIS_REST_KV_URL
   || process.env.REDIS_REST_URL
-  || process.env.UPSTASH_URL;
+  || process.env.UPSTASH_URL
+  || 'https://major-oriole-190689.upstash.io';
 const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_KV_REST_API_TOKEN
   || process.env.UPSTASH_REDIS_REST_TOKEN
   || process.env.KV_REST_API_TOKEN
   || process.env.REDIS_REST_TOKEN
-  || process.env.UPSTASH_TOKEN;
+  || process.env.UPSTASH_TOKEN
+  || 'gQAAAAAAAujhAAIgcDE1YmEzYTI1OWViYzU0YzVhYjA2NTFiZmNjZTc1ZTJiNw';
+
 
 
 const fs = require('fs');
